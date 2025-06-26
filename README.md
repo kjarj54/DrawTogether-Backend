@@ -266,15 +266,5 @@ For questions or suggestions, you can:
 - Open an issue on GitHub
 - Contact the development team
 
-## 🔮 Roadmap
-
-- [ ] Database persistence
-- [ ] User authentication
-- [ ] Private rooms with password
-- [ ] Advanced drawing tools
-- [ ] Drawing history
-- [ ] Export canvas as image
-- [ ] Spectator mode
-- [ ] Session time limits
 
 
