@@ -4,6 +4,7 @@ import java.net.InetSocketAddress;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,8 +18,12 @@ import com.drawtogether.repository.InMemoryRoomRepository;
 import com.drawtogether.service.RoomService;
 import com.drawtogether.service.RoomServiceImpl;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
+import com.google.gson.JsonSerializer;
 import com.google.gson.JsonSyntaxException;
 
 public class DrawWebSocketServer extends WebSocketServer {
@@ -27,13 +32,23 @@ public class DrawWebSocketServer extends WebSocketServer {
     private final Gson gson;
     private final Map<WebSocket, String> connectionToUserId;
     private final Map<WebSocket, String> connectionToRoomId;
+    private final Set<WebSocket> allConnections;
 
     public DrawWebSocketServer(int port) {
         super(new InetSocketAddress(port));
         this.roomService = new RoomServiceImpl(new InMemoryRoomRepository());
-        this.gson = new Gson();
+        
+        // Configurar Gson con adaptador personalizado para LocalDateTime
+        this.gson = new GsonBuilder()
+                .registerTypeAdapter(LocalDateTime.class, (JsonSerializer<LocalDateTime>) (src, typeOfSrc, context) -> 
+                    new JsonPrimitive(src.toString()))
+                .registerTypeAdapter(LocalDateTime.class, (JsonDeserializer<LocalDateTime>) (json, typeOfT, context) -> 
+                    LocalDateTime.parse(json.getAsString()))
+                .create();
+                
         this.connectionToUserId = new ConcurrentHashMap<>();
         this.connectionToRoomId = new ConcurrentHashMap<>();
+        this.allConnections = ConcurrentHashMap.newKeySet();
     }
 
     @Override
@@ -50,39 +65,54 @@ public class DrawWebSocketServer extends WebSocketServer {
 
         connectionToUserId.remove(conn);
         connectionToRoomId.remove(conn);
-
+        allConnections.remove(conn);
     }
 
     @Override
-    public void onError(WebSocket conn, Exception arg1) {
-
+    public void onError(WebSocket conn, Exception ex) {
+        System.err.println("WebSocket error: " + ex.getMessage());
+        if (conn != null) {
+            System.err.println("Connection: " + conn.getRemoteSocketAddress());
+        }
+        ex.printStackTrace();
     }
 
     @Override
     public void onMessage(WebSocket conn, String message) {
         try {
+            System.out.println("Received message: " + message); // Debug log
             JsonObject jsonMessage = JsonParser.parseString(message).getAsJsonObject();
             String action = jsonMessage.get("action").getAsString();
 
+            System.out.println("Processing action: " + action); // Debug log
+
             switch (action) {
                 case "JOIN_ROOM" -> handleJoinRoom(conn, jsonMessage);
-                case "LEAVE_ROOM" -> handleLeaveRoom(conn, jsonMessage);
+                case "LEAVE_ROOM" -> handleLeaveRoom(conn);
                 case "DRAW_EVENT" -> handleDrawEvent(conn, jsonMessage);
                 case "CREATE_ROOM" -> handleCreateRoom(conn, jsonMessage);
                 case "GET_ROOMS" -> handleGetRooms(conn);
-                default -> sendMessage(conn, createResponse("ERROR", "Acción no reconocida", null));
+                default -> {
+                    System.err.println("Unrecognized action: " + action);
+                    sendMessage(conn, createResponse("ERROR", "Acción no reconocida: " + action, null));
+                }
             }
         } catch (JsonSyntaxException e) {
-            System.err.println("Error procesando mensaje: " + e.getMessage());
-            sendMessage(conn, createResponse("ERROR", "Error procesando mensaje", null));
+            System.err.println("Error procesando mensaje JSON: " + e.getMessage());
+            System.err.println("Mensaje recibido: " + message);
+            sendMessage(conn, createResponse("ERROR", "Error procesando mensaje JSON", null));
+        } catch (Exception e) {
+            System.err.println("Error general procesando mensaje: " + e.getMessage());
+            e.printStackTrace();
+            sendMessage(conn, createResponse("ERROR", "Error interno del servidor", null));
         }
     }
 
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         System.out.println("Nueva conexion WebSocket:" + conn.getRemoteSocketAddress());
+        allConnections.add(conn);
         sendMessage(conn, createResponse("CONNECTION_ESTABLISHED", "Conectado al server", null));
-
     }
 
     @Override
@@ -114,10 +144,27 @@ public class DrawWebSocketServer extends WebSocketServer {
     }
 
     private void handleGetRooms(WebSocket conn) {
-        var rooms = roomService.getAllRooms();
-        Map<String, Object> response = Map.of("rooms", rooms);
-        sendMessage(conn, createResponse("ROOMS_LIST", "Lista de salas", response));
-
+        try {
+            var rooms = roomService.getAllRooms();
+            
+            // Convertir las salas a un formato serializable simple
+            var roomsData = rooms.stream()
+                .map(room -> Map.of(
+                    "id", room.getId(),
+                    "name", room.getName(),
+                    "maxParticipants", room.getMaxParticipants(),
+                    "currentParticipantsCount", room.getCurrentParticipantsCount(),
+                    "createdAt", room.getCreatedAt().toString()
+                ))
+                .toList();
+            
+            Map<String, Object> response = Map.of("rooms", roomsData);
+            sendMessage(conn, createResponse("ROOMS_LIST", "Lista de salas", response));
+        } catch (Exception e) {
+            System.err.println("Error getting rooms: " + e.getMessage());
+            e.printStackTrace();
+            sendMessage(conn, createResponse("ERROR", "Error obteniendo lista de salas", null));
+        }
     }
 
     private void broadcastToRoom(String roomId, String message) {
@@ -131,20 +178,78 @@ public class DrawWebSocketServer extends WebSocketServer {
                 .forEach(entry -> sendMessage(entry.getKey(), message));
     }
 
-    public void handleCreateRoom(WebSocket conn, JsonObject message) {
-        String roomName = message.get("roomName").getAsString();
-        int maxUsers = message.get("maxUsers").getAsInt();
-
-        var room = roomService.createRoom(roomName, maxUsers);
-        Map<String, Object> roomData = Map.of(
-                "roomId", room.getId(),
-                "roomName", room.getName(),
-                "maxParticipants", room.getMaxParticipants());
-
-        sendMessage(conn, createResponse("ROOM_CREATED", "Sala creada exitosamente", roomData));
+    private void broadcastToAll(String message) {
+        allConnections.forEach(conn -> sendMessage(conn, message));
     }
 
-    private void handleLeaveRoom(WebSocket conn, JsonObject message) {
+    public void handleCreateRoom(WebSocket conn, JsonObject message) {
+        try {
+            // Validar que los parámetros existen
+            if (!message.has("roomName") || !message.has("maxUsers")) {
+                sendMessage(conn, createResponse("ERROR", "Faltan parámetros: roomName y maxUsers son requeridos", null));
+                return;
+            }
+
+            String roomName = message.get("roomName").getAsString().trim();
+            int maxUsers = message.get("maxUsers").getAsInt();
+
+            // Validaciones
+            if (roomName.isEmpty()) {
+                sendMessage(conn, createResponse("ERROR", "El nombre de la sala no puede estar vacío", null));
+                return;
+            }
+
+            if (roomName.length() < 3) {
+                sendMessage(conn, createResponse("ERROR", "El nombre de la sala debe tener al menos 3 caracteres", null));
+                return;
+            }
+
+            if (maxUsers < 2 || maxUsers > 20) {
+                sendMessage(conn, createResponse("ERROR", "El número de participantes debe estar entre 2 y 20", null));
+                return;
+            }
+
+            var room = roomService.createRoom(roomName, maxUsers);
+            
+            // Crear datos simples para enviar (sin objetos complejos)
+            Map<String, Object> roomData = Map.of(
+                    "roomId", room.getId(),
+                    "roomName", room.getName(),
+                    "maxParticipants", room.getMaxParticipants(),
+                    "currentParticipantsCount", room.getCurrentParticipantsCount(),
+                    "createdAt", room.getCreatedAt().toString());
+
+            sendMessage(conn, createResponse("ROOM_CREATED", "Sala creada exitosamente", roomData));
+            
+            System.out.println("Room created successfully: " + room.getId());
+            
+            // Notificar a todos los clientes conectados sobre la nueva sala
+            try {
+                var allRooms = roomService.getAllRooms();
+                var roomsData = allRooms.stream()
+                    .map(r -> Map.of(
+                        "id", r.getId(),
+                        "name", r.getName(),
+                        "maxParticipants", r.getMaxParticipants(),
+                        "currentParticipantsCount", r.getCurrentParticipantsCount(),
+                        "createdAt", r.getCreatedAt().toString()
+                    ))
+                    .toList();
+                
+                Map<String, Object> updateResponse = Map.of("rooms", roomsData);
+                broadcastToAll(createResponse("ROOMS_UPDATED", "Lista de salas actualizada", updateResponse));
+            } catch (Exception ex) {
+                System.err.println("Error broadcasting room update: " + ex.getMessage());
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error creating room: " + e.getMessage());
+            e.printStackTrace();
+            sendMessage(conn, createResponse("ERROR", "Error interno del servidor al crear la sala", null));
+        }
+    }
+
+    private void handleLeaveRoom(WebSocket conn) {
         String userId = connectionToUserId.get(conn);
         String roomId = connectionToRoomId.get(conn);
 
