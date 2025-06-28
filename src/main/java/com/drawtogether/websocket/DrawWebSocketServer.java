@@ -12,6 +12,7 @@ import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
+import com.drawtogether.model.DrawData;
 import com.drawtogether.model.DrawEvent;
 import com.drawtogether.model.DrawEventType;
 import com.drawtogether.repository.InMemoryRoomRepository;
@@ -298,23 +299,56 @@ public class DrawWebSocketServer extends WebSocketServer {
             return;
         }
 
-        JsonObject eventData = message.getAsJsonObject("eventData");
-        DrawEventType eventType = DrawEventType.valueOf(eventData.get("type").getAsString());
+        try {
+            JsonObject eventData = message.getAsJsonObject("eventData");
+            DrawEventType eventType = DrawEventType.valueOf(eventData.get("type").getAsString());
+            
+            DrawData drawData = null;
+            
+            // Extraer datos de dibujo si están presentes
+            if (eventData.has("x") && eventData.has("y") && eventData.has("color") && eventData.has("strokeWidth")) {
+                double x = eventData.get("x").getAsDouble();
+                double y = eventData.get("y").getAsDouble();
+                String color = eventData.get("color").getAsString();
+                double strokeWidth = eventData.get("strokeWidth").getAsDouble();
+                
+                drawData = new DrawData(color, strokeWidth, x, y);
+            }
 
-        DrawEvent drawEvent = new DrawEvent(
-                UUID.randomUUID().toString(),
-                roomId,
-                LocalDateTime.now(),
-                userId,
-                eventType);
+            DrawEvent drawEvent = new DrawEvent(
+                    UUID.randomUUID().toString(),
+                    roomId,
+                    LocalDateTime.now(),
+                    userId,
+                    eventType,
+                    drawData);
 
-        roomService.addDrawEvent(roomId, drawEvent);
+            roomService.addDrawEvent(roomId, drawEvent);
 
-        // Retransmitir el evento a todos los usuarios en la sala
-        Map<String, Object> eventResponse = Map.of(
-                "drawEvent", drawEvent,
-                "eventData", eventData.toString());
+            // Crear respuesta con todos los datos necesarios para el frontend
+            Map<String, Object> eventResponse = new HashMap<>();
+            eventResponse.put("eventId", drawEvent.getId());
+            eventResponse.put("userId", drawEvent.getUserId());
+            eventResponse.put("timestamp", drawEvent.getTimestamp().toString());
+            eventResponse.put("type", drawEvent.getType().toString());
+            
+            if (drawData != null) {
+                Map<String, Object> drawDataMap = Map.of(
+                    "x", drawData.getX(),
+                    "y", drawData.getY(),
+                    "color", drawData.getColor(),
+                    "strokeWidth", drawData.getStrokeWidth()
+                );
+                eventResponse.put("drawData", drawDataMap);
+            }
 
-        broadcastToRoom(roomId, createResponse("DRAW_EVENT", "Evento de dibujo", eventResponse));
+            // Retransmitir el evento a todos los usuarios en la sala (incluyendo el remitente)
+            broadcastToRoom(roomId, createResponse("DRAW_EVENT", "Evento de dibujo", eventResponse));
+            
+        } catch (Exception e) {
+            System.err.println("Error processing draw event: " + e.getMessage());
+            e.printStackTrace();
+            sendMessage(conn, createResponse("ERROR", "Error procesando evento de dibujo", null));
+        }
     }
 }

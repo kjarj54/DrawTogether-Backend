@@ -8,13 +8,19 @@ public class DrawEvent {
     private final String userId;
     private final LocalDateTime timestamp;
     private final DrawEventType type;
+    private final DrawData drawData;
 
-    public DrawEvent(String id, String roomId, LocalDateTime timestamp, String userId, DrawEventType type) {
+    public DrawEvent(String id, String roomId, LocalDateTime timestamp, String userId, DrawEventType type, DrawData drawData) {
         this.id = id;
         this.roomId = roomId;
         this.timestamp = timestamp;
         this.userId = userId;
         this.type = type;
+        this.drawData = drawData;
+    }
+
+    public DrawEvent(String id, String roomId, LocalDateTime timestamp, String userId, DrawEventType type) {
+        this(id, roomId, timestamp, userId, type, null);
     }
 
     public String getId(){
@@ -34,5 +40,9 @@ public class DrawEvent {
 
     public DrawEventType getType() {
         return type;
+    }
+
+    public DrawData getDrawData() {
+        return drawData;
     }
 }
