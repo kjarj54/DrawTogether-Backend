@@ -62,6 +62,9 @@ public class DrawWebSocketServer extends WebSocketServer {
         if (userId != null && roomId != null) {
             roomService.leaveRoom(roomId, userId);
             broadcastToRoom(roomId, createResponse("USER_LEFT", "Usuario desconectado", Map.of("userId", userId)));
+            
+            // Actualizar la lista de salas para todos los clientes
+            broadcastRoomListUpdate();
         }
 
         connectionToUserId.remove(conn);
@@ -262,6 +265,8 @@ public class DrawWebSocketServer extends WebSocketServer {
             sendMessage(conn, createResponse("ROOM_LEFT", "Has salido de la sala", null));
             broadcastToRoom(roomId, createResponse("USER_LEFT", "Usuario salio de la sala", Map.of("userId", userId)));
 
+            // Actualizar la lista de salas para todos los clientes
+            broadcastRoomListUpdate();
         }
     }
 
@@ -285,6 +290,9 @@ public class DrawWebSocketServer extends WebSocketServer {
                 broadcastToRoom(roomId, createResponse("USER_JOINED", "Nuevo usuario se unió",
                         Map.of("userId", userId)), conn);
             });
+
+            // Actualizar la lista de salas para todos los clientes
+            broadcastRoomListUpdate();
         } else {
             sendMessage(conn, createResponse("ERROR", "No se pudo unir a la sala", null));
         }
@@ -349,6 +357,30 @@ public class DrawWebSocketServer extends WebSocketServer {
             System.err.println("Error processing draw event: " + e.getMessage());
             e.printStackTrace();
             sendMessage(conn, createResponse("ERROR", "Error procesando evento de dibujo", null));
+        }
+    }
+
+    /**
+     * Método para enviar la lista actualizada de salas a todos los clientes conectados
+     */
+    private void broadcastRoomListUpdate() {
+        try {
+            var allRooms = roomService.getAllRooms();
+            var roomsData = allRooms.stream()
+                .map(room -> Map.of(
+                    "id", room.getId(),
+                    "name", room.getName(),
+                    "maxParticipants", room.getMaxParticipants(),
+                    "currentParticipantsCount", room.getCurrentParticipantsCount(),
+                    "createdAt", room.getCreatedAt().toString()
+                ))
+                .toList();
+            
+            Map<String, Object> updateResponse = Map.of("rooms", roomsData);
+            broadcastToAll(createResponse("ROOMS_UPDATED", "Lista de salas actualizada", updateResponse));
+        } catch (Exception e) {
+            System.err.println("Error broadcasting room list update: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }
