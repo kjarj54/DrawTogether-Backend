@@ -2,7 +2,9 @@ package com.drawtogether.websocket;
 
 import java.net.InetSocketAddress;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -61,7 +63,21 @@ public class DrawWebSocketServer extends WebSocketServer {
 
         if (userId != null && roomId != null) {
             roomService.leaveRoom(roomId, userId);
-            broadcastToRoom(roomId, createResponse("USER_LEFT", "Usuario desconectado", Map.of("userId", userId)));
+            
+            // Obtener información actualizada de la sala después de que el usuario salga
+            roomService.getRoomById(roomId).ifPresent(room -> {
+                // Convertir Set a List para JSON
+                List<String> participantsList = new ArrayList<>(room.getParticipants());
+                
+                Map<String, Object> userLeftData = Map.of(
+                        "userId", userId,
+                        "roomId", roomId,
+                        "participants", participantsList,
+                        "maxParticipants", room.getMaxParticipants(),
+                        "currentParticipantsCount", room.getCurrentParticipantsCount()
+                );
+                broadcastToRoom(roomId, createResponse("USER_LEFT", "Usuario desconectado", userLeftData));
+            });
             
             // Actualizar la lista de salas para todos los clientes
             broadcastRoomListUpdate();
@@ -263,7 +279,21 @@ public class DrawWebSocketServer extends WebSocketServer {
             connectionToRoomId.remove(conn);
 
             sendMessage(conn, createResponse("ROOM_LEFT", "Has salido de la sala", null));
-            broadcastToRoom(roomId, createResponse("USER_LEFT", "Usuario salio de la sala", Map.of("userId", userId)));
+            
+            // Obtener información actualizada de la sala después de que el usuario salga
+            roomService.getRoomById(roomId).ifPresent(room -> {
+                // Convertir Set a List para JSON
+                List<String> participantsList = new ArrayList<>(room.getParticipants());
+                
+                Map<String, Object> userLeftData = Map.of(
+                        "userId", userId,
+                        "roomId", roomId,
+                        "participants", participantsList,
+                        "maxParticipants", room.getMaxParticipants(),
+                        "currentParticipantsCount", room.getCurrentParticipantsCount()
+                );
+                broadcastToRoom(roomId, createResponse("USER_LEFT", "Usuario salio de la sala", userLeftData));
+            });
 
             // Actualizar la lista de salas para todos los clientes
             broadcastRoomListUpdate();
@@ -280,15 +310,28 @@ public class DrawWebSocketServer extends WebSocketServer {
 
             // Enviar historial de eventos de dibujo
             roomService.getRoomById(roomId).ifPresent(room -> {
+                // Convertir Set a List para JSON
+                List<String> participantsList = new ArrayList<>(room.getParticipants());
+                
                 Map<String, Object> roomData = Map.of(
                         "roomId", roomId,
+                        "roomName", room.getName(),
+                        "maxParticipants", room.getMaxParticipants(),
+                        "currentParticipantsCount", room.getCurrentParticipantsCount(),
                         "drawEvents", room.getDrawEvents(),
-                        "participants", room.getParticipants());
+                        "participants", participantsList);
                 sendMessage(conn, createResponse("ROOM_JOINED", "Te has unido a la sala", roomData));
 
-                // Notificar a otros usuarios
+                // Notificar a otros usuarios con información completa de la sala
+                Map<String, Object> userJoinedData = Map.of(
+                        "userId", userId,
+                        "roomId", roomId,
+                        "participants", participantsList,
+                        "maxParticipants", room.getMaxParticipants(),
+                        "currentParticipantsCount", room.getCurrentParticipantsCount()
+                );
                 broadcastToRoom(roomId, createResponse("USER_JOINED", "Nuevo usuario se unió",
-                        Map.of("userId", userId)), conn);
+                        userJoinedData), conn);
             });
 
             // Actualizar la lista de salas para todos los clientes
@@ -319,8 +362,11 @@ public class DrawWebSocketServer extends WebSocketServer {
                 double y = eventData.get("y").getAsDouble();
                 String color = eventData.get("color").getAsString();
                 double strokeWidth = eventData.get("strokeWidth").getAsDouble();
+                // Siempre incluir la herramienta, por defecto "brush"
+                String tool = eventData.has("tool") && !eventData.get("tool").isJsonNull() ? 
+                    eventData.get("tool").getAsString() : "brush";
                 
-                drawData = new DrawData(color, strokeWidth, x, y);
+                drawData = new DrawData(color, strokeWidth, x, y, tool);
             }
 
             DrawEvent drawEvent = new DrawEvent(
@@ -345,13 +391,14 @@ public class DrawWebSocketServer extends WebSocketServer {
                     "x", drawData.getX(),
                     "y", drawData.getY(),
                     "color", drawData.getColor(),
-                    "strokeWidth", drawData.getStrokeWidth()
+                    "strokeWidth", drawData.getStrokeWidth(),
+                    "tool", drawData.getTool()
                 );
                 eventResponse.put("drawData", drawDataMap);
             }
 
-            // Retransmitir el evento a todos los usuarios en la sala (incluyendo el remitente)
-            broadcastToRoom(roomId, createResponse("DRAW_EVENT", "Evento de dibujo", eventResponse));
+            // Retransmitir el evento solo a otros usuarios en la sala (NO al remitente)
+            broadcastToRoom(roomId, createResponse("DRAW_EVENT", "Evento de dibujo", eventResponse), conn);
             
         } catch (Exception e) {
             System.err.println("Error processing draw event: " + e.getMessage());
