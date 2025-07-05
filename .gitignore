@@ -36,3 +36,19 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### Docker ###
+.dockerignore
+
+### Logs ###
+*.log
+logs/
+
+### Environment variables ###
+.env
+.env.local
+.env.production
+
+### Temporary files ###
+*.tmp
+*.temp

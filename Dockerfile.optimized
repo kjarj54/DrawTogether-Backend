@@ -1,0 +1,42 @@
+# Dockerfile optimizado con multi-stage build
+FROM maven:3.9.5-openjdk-21-slim AS build
+
+# Establecer directorio de trabajo
+WORKDIR /app
+
+# Copiar archivos de configuración de Maven
+COPY pom.xml .
+
+# Descargar dependencias (esto ayuda con el caching de Docker)
+RUN mvn dependency:go-offline -B
+
+# Copiar el código fuente
+COPY src ./src
+
+# Compilar la aplicación y crear JAR
+RUN mvn clean package -DskipTests
+
+# Etapa de runtime - usando imagen más segura
+FROM eclipse-temurin:21-jre-alpine
+
+# Crear usuario no-root para seguridad (Alpine Linux)
+RUN addgroup -g 1001 -S app && adduser -u 1001 -S app -G app
+
+# Establecer directorio de trabajo
+WORKDIR /app
+
+# Copiar el JAR desde la etapa de build
+COPY --from=build /app/target/*-shaded.jar app.jar
+
+# Cambiar ownership del archivo
+RUN chown app:app app.jar
+
+# Cambiar a usuario no-root
+USER app
+
+# Exponer el puerto que usa la aplicación
+EXPOSE $PORT
+
+# Comando para ejecutar la aplicación
+# Render proporciona la variable de entorno PORT
+CMD ["java", "-jar", "app.jar"]

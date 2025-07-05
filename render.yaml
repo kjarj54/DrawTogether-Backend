@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: drawtogether-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: oregon # Puedes cambiar la región si prefieres
+    plan: free # Cambiar a "starter" si necesitas más recursos
+    envVars:
+      - key: JAVA_OPTS
+        value: "-Xmx512m -Xms256m" # Limitar memoria para el plan gratuito
